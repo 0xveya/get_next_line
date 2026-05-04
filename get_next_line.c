@@ -101,3 +101,29 @@ char	*get_next_line(int fd)
 		return (free_stuff(&dat), NULL);
 	return (consume_line(&dat), line);
 }
+
+/*
+#include <fcntl.h>
+#include <stdio.h>
+
+int	main(int argc, char **argv)
+{
+	int		fd;
+	char	*line;
+
+	if (argc != 2)
+		return (printf("usage: %s <file>\n", argv[0]), 1);
+	fd = open(argv[1], O_RDONLY);
+	if (fd < 0)
+		return (perror("open"), 1);
+	line = get_next_line(fd);
+	while (line)
+	{
+		printf("%s", line);
+		free(line);
+		line = get_next_line(fd);
+	}
+	close(fd);
+	return (0);
+}
+*/
