@@ -6,7 +6,7 @@
 /*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
 /*   Created: 2026/05/04 17:24:21 by sfurst           #+#    #+#              */
-/*   Updated: 2026/05/04 19:01:16 by sfurst          ###   ########.fr        */
+/*   Updated: 2026/05/06 22:28:04 by sfurst          ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -28,23 +28,20 @@ int	has_newline(t_gnl *dat)
 
 int	read_until_line(int fd, t_gnl *dat)
 {
-	char	*buf;
-	ssize_t	bytes;
+	static char	buf[BUFFER_SIZE];
+	ssize_t		bytes;
 
-	buf = malloc(BUFFER_SIZE);
-	if (!buf)
-		return (0);
 	while (!has_newline(dat))
 	{
 		bytes = read(fd, buf, BUFFER_SIZE);
 		if (bytes < 0)
-			return (free(buf), 0);
+			return (0);
 		if (bytes == 0)
 			break ;
 		if (!append_data(dat, buf, bytes))
-			return (free(buf), 0);
+			return (0);
 	}
-	return (free(buf), 1);
+	return (1);
 }
 
 char	*extract_line(t_gnl *dat)
