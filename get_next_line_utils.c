@@ -3,85 +3,67 @@
 /*                                                       :::      ::::::::    */
 /*   get_next_line_utils.c                             :+:      :+:    :+:    */
 /*                                                   +:+ +:+         +:+      */
-/*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
+/*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
-/*   Created: 2026/05/04 17:24:16 by sfurst           #+#    #+#              */
-/*   Updated: 2026/05/06 22:26:36 by sfurst          ###   ########.fr        */
+/*   Created: 2026/05/04 17:24:16 by flaltens         #+#    #+#              */
+/*   Updated: 2026/08/15 21:28:29 by flaltens        ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "get_next_line.h"
+#include <limits.h>
 
-void	*ft_memmove(void *dst, const void *src, size_t len)
+static void	copy_bytes(char *dst, const char *src, ssize_t len)
 {
-	unsigned char	*dest_char;
-	unsigned char	*src_char;
-
-	dest_char = (unsigned char *)dst;
-	src_char = (unsigned char *)src;
-	if (!dst && !src)
-		return (dst);
-	if (src < dst)
-		while (len--)
-			dest_char[len] = src_char[len];
-	else
-		while (len--)
-			*dest_char++ = *src_char++;
-	return (dst);
+	while (len-- > 0)
+		*dst++ = *src++;
 }
 
-void	*ft_memcpy(void *dst, const void *src, size_t n)
-{
-	unsigned char	*dstc;
-	unsigned char	*srcc;
-
-	dstc = (unsigned char *)dst;
-	srcc = (unsigned char *)src;
-	while (n--)
-		*dstc++ = *srcc++;
-	return (dst);
-}
-
-size_t	ft_strlen(const char *s)
-{
-	size_t	i;
-
-	i = 0;
-	while ((s[i]) && (i++, 1))
-		;
-	return (i);
-}
-
-void	free_stuff(t_gnl *dat)
-{
-	if (dat->data)
-		free(dat->data);
-	dat->data = NULL;
-	dat->cap = 0;
-	dat->len = 0;
-}
-
-int	append_data(t_gnl *dat, char *buf, ssize_t bytes)
+static int	grow_line(t_gnl *gnl, ssize_t needed)
 {
 	char	*new;
-	ssize_t	new_cap;
+	ssize_t	capacity;
 
-	if (dat->len + bytes + 1 > dat->cap)
+	if (needed <= gnl->line_cap)
+		return (1);
+	capacity = gnl->line_cap;
+	if (capacity == 0)
+		capacity = needed;
+	while (capacity < needed)
 	{
-		new_cap = dat->cap;
-		if (new_cap == 0)
-			new_cap = bytes + 1;
-		while (new_cap < dat->len + bytes + 1)
-			new_cap *= 2;
-		new = malloc(new_cap);
-		if (!new)
-			return (0);
-		if (dat->data)
-			ft_memcpy(new, dat->data, dat->len);
-		free(dat->data);
-		dat->data = new;
-		dat->cap = new_cap;
+		if (capacity > SSIZE_MAX / 2)
+			capacity = needed;
+		else
+			capacity *= 2;
 	}
-	ft_memcpy(dat->data + dat->len, buf, bytes);
-	return (dat->len += bytes, dat->data[dat->len] = '\0', 1);
+	new = malloc(capacity);
+	if (!new)
+		return (0);
+	copy_bytes(new, gnl->line, gnl->line_len);
+	free(gnl->line);
+	gnl->line = new;
+	gnl->line_cap = capacity;
+	return (1);
+}
+
+int	append_chunk(t_gnl *gnl, const char *chunk, ssize_t len)
+{
+	if (len > SSIZE_MAX - gnl->line_len - 1)
+		return (0);
+	if (!grow_line(gnl, gnl->line_len + len + 1))
+		return (0);
+	copy_bytes(gnl->line + gnl->line_len, chunk, len);
+	gnl->line_len += len;
+	gnl->line[gnl->line_len] = '\0';
+	return (1);
+}
+
+void	clear_gnl(t_gnl *gnl)
+{
+	free(gnl->line);
+	gnl->line = NULL;
+	gnl->line_len = 0;
+	gnl->line_cap = 0;
+	gnl->pos = 0;
+	gnl->read_len = 0;
 }

@@ -3,17 +3,16 @@
 /*                                                       :::      ::::::::    */
 /*   get_next_line.h                                   :+:      :+:    :+:    */
 /*                                                   +:+ +:+         +:+      */
-/*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
+/*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
-/*   Created: 2026/05/04 17:24:25 by sfurst           #+#    #+#              */
-/*   Updated: 2026/05/06 22:26:19 by sfurst          ###   ########.fr        */
+/*   Created: 2026/05/04 17:24:25 by flaltens         #+#    #+#              */
+/*   Updated: 2026/08/15 21:28:28 by flaltens        ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
 #ifndef GET_NEXT_LINE_H
 # define GET_NEXT_LINE_H
 
-# include <limits.h>
 # include <stdlib.h>
 # include <unistd.h>
 
@@ -23,16 +22,16 @@
 
 typedef struct s_gnl
 {
-	char	*data;
-	ssize_t	cap;
-	ssize_t	len;
+	char	read_buf[BUFFER_SIZE];
+	ssize_t	pos;
+	ssize_t	read_len;
+	char	*line;
+	ssize_t	line_len;
+	ssize_t	line_cap;
 }			t_gnl;
 
-int			append_data(t_gnl *dat, char *buf, ssize_t bytes);
-void		free_stuff(t_gnl *dat);
-void		*ft_memcpy(void *dst, const void *src, size_t n);
-void		*ft_memmove(void *dst, const void *src, size_t len);
-size_t		ft_strlen(const char *s);
+int			append_chunk(t_gnl *gnl, const char *chunk, ssize_t len);
+void		clear_gnl(t_gnl *gnl);
 char		*get_next_line(int fd);
 
 #endif

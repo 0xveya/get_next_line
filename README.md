@@ -56,28 +56,24 @@ manual evaluation, then comment it again after.
 
 ## Implementation Strategy
 
-Instead of using repeated `strjoin` operations to grow the internal buffer, this implementation uses a preallocation and exponential growth strategy.
+The static `t_gnl` state is a small buffered reader. It keeps the unread position
+inside the current `BUFFER_SIZE` chunk, plus the line currently being built.
 
-The core idea is to maintain a dynamic buffer with:
+Each call consumes only as much of the read chunk as the next line needs. This
+means bytes after a newline stay in place for the following call: there is no
+remainder allocation and no `memmove`. The line allocation grows geometrically
+only when a line spans multiple chunks, then ownership of that allocation is
+passed directly to the caller.
 
-* a pointer to allocated memory (`data`)
-* current length (`len`)
-* total capacity (`cap`)
-
-When new data is read:
-
-* If there is enough capacity, it is appended directly using `memcpy`
-* If not, the buffer is resized by growing its capacity (typically ×2) until it can fit the new data
-
-This strategy is used to efficiently accumulate data read from the file descriptor
-until a newline is found, minimizing reallocations and copies compared to naive
-string concatenation approaches.
+The bonus version uses one static array of reader states. Its read buffers are
+allocated only for file descriptors that are actually used, avoiding a
+`MAX_FD * BUFFER_SIZE` static array.
 
 ### Why this approach
 
-* Better performance: avoids repeatedly copying the entire buffer every time data is added
-* Fewer allocations: the buffer size is increased by doubling it when needed instead of growing little by little
-* More control: explicit tracking of buffer size and usage
+* No repeated `strjoin` calls or shifting of unread bytes
+* Usually one required allocation per returned line
+* No reads past the chunk that completes the current line
 
 This pattern is commonly used in systems programming and is similar to how dynamic arrays (e.g., vectors) are implemented.
 
@@ -85,9 +81,8 @@ The idea was inspired in part by optimization practices such as Go’s prealloca
 
 ## Notes
 
-This implementation stores unread remainder data between calls, keeps reading
-until a newline or EOF is found, extracts one line, and then shifts the leftover
-bytes for the next call.
+This implementation keeps unread bytes in its read chunk between calls and
+returns lines including their trailing newline, as required by the subject.
 
 ## Resources
 
