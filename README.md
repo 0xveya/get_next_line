@@ -163,10 +163,12 @@ __m256i nl;
 declares one 256-bit vector. A vector of this size holds 32 eight-bit bytes.
 
 ```c
-nl = _mm256_set1_epi8('\n');
+nl = _mm256_set1_epi8(GNL_DELIMITER);
 ```
 
-fills all 32 lanes with the newline byte.
+fills all 32 lanes with the configured delimiter byte. `_epi8` describes 32
+packed eight-bit integer lanes. With the default configuration, every lane
+contains newline.
 
 ```c
 gnl->scan_i = 0;
@@ -190,16 +192,20 @@ gnl->scan_v = _mm256_loadu_si256((const __m256i *)(gnl->read_buf
 ```
 
 loads those 32 bytes. The `u` means unaligned, so `read_buf + pos + scan_i` does
-not need a 32-byte-aligned address.
+not need a 32-byte-aligned address. The address expression selects the first
+unscanned byte, and the cast presents that byte pointer to the intrinsic as a
+pointer to one read-only 256-bit vector.
 
 ```c
 gnl->scan_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(gnl->scan_v,
             nl));
 ```
 
-compares each input byte with newline. Equal lanes become all-one bytes. The
-movemask then collects their top bits into a 32-bit integer, where bit 0
-represents the first byte and bit 31 represents the last.
+`_mm256_cmpeq_epi8` performs 32 independent byte comparisons. A matching lane
+becomes `0xff`, while a different lane becomes `0x00`. The inner comparison
+finishes before `_mm256_movemask_epi8` takes the high bit of every result lane
+and packs those bits into a 32-bit integer. Bit 0 represents the first loaded
+byte and bit 31 represents the last, so each set bit marks a delimiter.
 
 ```c
 if (gnl->scan_mask)
@@ -216,12 +222,32 @@ gnl->scan_i += 32;
 ```
 
 moves to the next vector when the block contains no newline. After the vector
-loop, the scalar loop checks the final 0 to 31 bytes. These are the bytes that do
-not fill a complete AVX2 register.
+loop, the scalar tail checks the final zero to 31 bytes:
+
+```c
+while (gnl->scan_i < gnl->scan_n)
+{
+    if (gnl->read_buf[gnl->pos + gnl->scan_i++] == GNL_DELIMITER)
+        return (gnl->scan_i);
+}
+return (gnl->scan_n);
+```
+
+The post-increment advances past every checked byte. When it finds the
+delimiter, the returned length therefore includes it. If no delimiter exists,
+the function returns the complete unread length.
 
 ## SIMD copy, line by line
 
-`copy_bytes` uses the same function-level `target("avx2")` attribute.
+`copy_bytes` uses the same function-level `target("avx2")` attribute:
+
+```c
+static void copy_bytes(char *dst, const char *src,
+    ssize_t len) __attribute__((target("avx2")));
+```
+
+The attribute affects code generation for this function only and does not alter
+the function's arguments or return type.
 
 ```c
 while (len >= 32)
@@ -235,7 +261,10 @@ _mm256_storeu_si256((__m256i *)dst,
 ```
 
 loads 32 unaligned source bytes and stores them at an unaligned destination.
-The source and destination never overlap in this implementation.
+The inner load is evaluated before the outer store. The casts present the byte
+pointers as vector pointers, while the `u` suffix means neither address needs
+32-byte alignment. The source and destination never overlap in this
+implementation, so `memmove` behavior is unnecessary.
 
 ```c
 dst += 32;
@@ -243,9 +272,17 @@ src += 32;
 len -= 32;
 ```
 
-advances both pointers and reduces the remaining length. A scalar loop copies
-the final 0 to 31 bytes. Explicit lengths also allow internal NUL bytes to be
-copied, although the subject declares binary-file behavior undefined.
+advances both pointers and reduces the remaining length. The scalar tail is:
+
+```c
+while (len-- > 0)
+    *dst++ = *src++;
+```
+
+It copies the final zero to 31 bytes one at a time. The postfix increments move
+both pointers after each assignment. Explicit lengths also allow internal NUL
+bytes to be copied, although the subject declares binary-file behavior
+undefined.
 
 ## Performance
 
