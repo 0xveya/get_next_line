@@ -74,6 +74,20 @@ byte per iteration. An AVX2 instruction operates on a 256-bit register, which
 can hold 32 independent bytes. Here, one vector comparison asks the same
 question of all 32 bytes: "is this byte a newline?"
 
+AVX2 means Advanced Vector Extensions 2. It is a hardware instruction-set
+extension implemented by many x86-64 CPUs, not a C library or an operating
+system feature. It gives the CPU 256-bit `YMM` vector registers and instructions
+for operations such as loading, storing, and comparing packed integer bytes.
+The C intrinsics in `<immintrin.h>` are compiler-provided names that map onto
+those CPU instructions.
+
+SIMD is the general idea; AVX2 is the particular CPU technology used by this
+implementation. Other architectures provide different SIMD instruction sets,
+such as NEON on ARM. A compiler accepting the intrinsics only proves it can
+create the instructions. The CPU running the program must also support AVX2.
+Because this project has no runtime dispatch or scalar fallback, an unsupported
+CPU may stop with an illegal-instruction fault.
+
 The copy loop gets a similar benefit. A scalar loop needs a load, a store,
 pointer updates, a length update, and a branch for every byte. The AVX2 loop
 loads and stores 32 bytes before doing its pointer updates and branch. Memory
@@ -332,6 +346,31 @@ keeps terminal rendering out of the measurement, although the local `main.c`
 still calls `printf` for every returned line. For careful comparisons, use the
 same compiler, flags, input, machine, power mode, and number of repetitions.
 
+### Allocation-failure and crash checks
+
+`funcheck` needs the compiled program before its flags are useful. The complete
+command for this project is:
+
+```sh
+cc -Wall -Wextra -Werror -D BUFFER_SIZE=42 \
+  main.c get_next_line.c get_next_line_utils.c -o /tmp/gnl-funcheck
+funcheck -abc /tmp/gnl-funcheck /tmp/gnl-many-long-lines.txt
+```
+
+Here, `-a` tracks allocations, `-b` keeps complete backtraces, and `-c` treats
+`abort()` as a crash. Running only `funcheck -abc` is incomplete and reports
+"No program specified." On the current implementation, funcheck 1.1.5 detected
+and tested nine functions, with nine passing.
+
+Use Valgrind separately because function-failure injection is not a substitute
+for checking ownership and invalid memory access:
+
+```sh
+valgrind --leak-check=full --show-leak-kinds=all \
+  --errors-for-leak-kinds=all --error-exitcode=99 \
+  /tmp/gnl-funcheck /tmp/gnl-many-long-lines.txt > /dev/null
+```
+
 ## Source overview
 
 - `get_next_line.c`: mandatory read loop and AVX2 newline search
@@ -352,6 +391,11 @@ same compiler, flags, input, machine, power mode, and number of repetitions.
   documents `__builtin_ctz` and its undefined zero-input case.
 - [Intel Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)
   documents the AVX2 load, compare, movemask, and store intrinsics.
+- [Single instruction, multiple data](https://en.wikipedia.org/wiki/Single_instruction%2C_multiple_data)
+  gives an overview of SIMD, its history, and data-level parallelism.
+- [Everyone Should Know SIMD](https://mitchellh.com/writing/everyone-should-know-simd)
+  explains the common vector-loop shape: broadcast, load, operate, reduce, then
+  finish with a scalar tail. That is the same shape used by `chunk_len`.
 - [C static storage duration](https://en.cppreference.com/w/c/language/static_storage_duration.html)
   explains the lifetime and initialization of the static reader state.
 - [Dynamic arrays](https://en.wikipedia.org/wiki/Dynamic_array) explains capacity
