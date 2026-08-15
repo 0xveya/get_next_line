@@ -2,439 +2,135 @@
 
 ## Description
 
-`get_next_line` returns one line at a time from a file descriptor. A returned
-line includes its trailing newline when one exists. End of file and errors return
-`NULL`.
+`get_next_line` reads one line at a time from a file descriptor. A returned line
+includes its terminating newline when one exists. At end of file, or when an
+error occurs, the function returns `NULL`.
 
-The mandatory implementation keeps one buffered reader in a static variable.
-The bonus implementation keeps one static array of readers so calls can be
-interleaved across several file descriptors.
+The main challenge is that `read()` does not understand lines. It returns at
+most `BUFFER_SIZE` bytes, so one call may contain part of a line, several lines,
+or the end of one line and the beginning of another. The implementation keeps
+the unread bytes between calls and grows the current line only when necessary.
 
-This version experiments with AVX2 SIMD. It searches 32 bytes for a newline at
-once and copies complete 32-byte blocks at once. The rest of the program still
-compiles for the normal target, without a global `-mavx2` flag.
+The mandatory version stores one reader in a static variable. The bonus version
+stores one reader per file descriptor, allowing reads from several descriptors
+to be interleaved.
+
+This version also experiments with AVX2 SIMD. Newline search and bulk copying
+process 32 bytes at a time, with a scalar loop handling the remaining bytes.
 
 ## Instructions
 
-The machine running this implementation must support AVX2. On Linux, check with:
-
-```sh
-grep -w avx2 /proc/cpuinfo
-```
-
-Build the mandatory version:
+Compile the mandatory files with a test program:
 
 ```sh
 cc -Wall -Wextra -Werror -D BUFFER_SIZE=42 \
   main.c get_next_line.c get_next_line_utils.c -o gnl
 ```
 
-Run it with:
-
-```sh
-./gnl input.txt
-```
-
-The three submitted bonus files compile with the same flags:
+Compile the bonus files:
 
 ```sh
 cc -Wall -Wextra -Werror -D BUFFER_SIZE=42 \
-  -c get_next_line_bonus.c get_next_line_utils_bonus.c
+  main.c get_next_line_bonus.c get_next_line_utils_bonus.c -o gnl_bonus
 ```
 
-`BUFFER_SIZE` may be changed or omitted. It defaults to 1 when omitted.
+`BUFFER_SIZE` defaults to `1` when it is not defined. It controls how many bytes
+each call to `read()` requests, not the maximum line length.
 
-The line terminator is also named in one place:
-
-```c
-#ifndef GNL_DELIMITER
-# define GNL_DELIMITER '\n'
-#endif
-```
-
-The subject behavior remains unchanged because the default is newline. For the
-common evaluation exercise of returning through another character, either edit
-that macro or override it while compiling. For example, this makes `a` terminate
-a returned segment:
+The delimiter defaults to newline and can be overridden at compile time:
 
 ```sh
 cc -Wall -Wextra -Werror -D BUFFER_SIZE=42 -D "GNL_DELIMITER='a'" \
-  main.c get_next_line.c get_next_line_utils.c -o /tmp/gnl-delimiter-a
+  main.c get_next_line.c get_next_line_utils.c -o gnl
 ```
 
-The delimiter is used by both the AVX2 broadcast and scalar tail, and the
-terminating delimiter remains included in the returned string.
-
-## Algorithm
-
-The static `t_gnl` value is zero-initialized by C before its first use. It stores
-the current read buffer, the unread position, the number of valid bytes, and the
-line being assembled. Explicit `line_len` and `line_cap` fields mean the code
-never has to call `strlen` to rediscover information it already knows.
-
-Each call follows this loop:
-
-1. Refill `read_buf` only when its previous contents have been consumed.
-2. Search the unread bytes up to and including the first newline.
-3. Grow the line allocation only when the new chunk does not fit.
-4. Copy the chunk, terminate the line with `\0`, and advance `pos`.
-5. Return immediately if the last consumed source byte was `\n`.
-
-Bytes after a newline remain in `read_buf` for the next call. There is no
-remainder allocation and no `memmove`. A line starts with at least
-`max(BUFFER_SIZE + 1, 64)` bytes of capacity and doubles when necessary. This
-turns repeated exact-size reallocations into geometric growth.
-
-The bonus version uses the same algorithm. Its read buffer is allocated lazily
-for each descriptor, avoiding a static `MAX_FD * BUFFER_SIZE` byte array.
-
-## What SIMD means
-
-SIMD means Single Instruction, Multiple Data. A scalar byte loop handles one
-byte per iteration. An AVX2 instruction operates on a 256-bit register, which
-can hold 32 independent bytes. Here, one vector comparison asks the same
-question of all 32 bytes: "is this byte a newline?"
-
-AVX2 means Advanced Vector Extensions 2. It is a hardware instruction-set
-extension implemented by many x86-64 CPUs, not a C library or an operating
-system feature. It gives the CPU 256-bit `YMM` vector registers and instructions
-for operations such as loading, storing, and comparing packed integer bytes.
-The C intrinsics in `<immintrin.h>` are compiler-provided names that map onto
-those CPU instructions.
-
-SIMD is the general idea; AVX2 is the particular CPU technology used by this
-implementation. Other architectures provide different SIMD instruction sets,
-such as NEON on ARM. A compiler accepting the intrinsics only proves it can
-create the instructions. The CPU running the program must also support AVX2.
-Because this project has no runtime dispatch or scalar fallback, an unsupported
-CPU may stop with an illegal-instruction fault.
-
-The copy loop gets a similar benefit. A scalar loop needs a load, a store,
-pointer updates, a length update, and a branch for every byte. The AVX2 loop
-loads and stores 32 bytes before doing its pointer updates and branch. Memory
-bandwidth, cache state, and small scalar tails still matter, so this is not a
-guaranteed 32-times speedup. It simply removes much of the per-byte loop work.
-
-This distinction matters for the evaluator compile command. With no `-O` flag,
-the compiler is not being asked to discover and auto-vectorize a scalar loop.
-The intrinsics explicitly request vector operations, so the AVX2 instructions
-are still emitted.
-
-## Why capacity growth is faster than `strjoin`
-
-Suppose a long line arrives in `n` chunks. An exact-size `strjoin` approach
-allocates a new string for every chunk, measures the old string, copies the old
-contents again, copies the new chunk, and frees the previous string. Early bytes
-are recopied for every later chunk. The approximate historical copy work is:
-
-```text
-BUFFER_SIZE * (1 + 2 + 3 + ... + n)
-```
-
-That triangular sum grows quadratically with the number of chunks. It also
-causes one allocation and free cycle per chunk.
-
-This implementation keeps `line_len` and a separate `line_cap`. Appending does
-not scan old bytes. When capacity is exhausted, it doubles, so reallocations
-happen around 64, 128, 256, 512 bytes, and so on instead of after every read.
-Each chunk is copied into the line once, and existing bytes move only during the
-much less frequent growth steps. The total work stays linear in the line length.
-
-## SIMD newline search, line by line
-
-The declaration:
-
-```c
-static ssize_t chunk_len(t_gnl *gnl) __attribute__((target("avx2")));
-```
-
-asks GCC or Clang to compile only `chunk_len` with AVX2 enabled. This is why the
-normal compile command does not need `-mavx2`. The same source was tested with
-GCC 16.2.1 and Clang 22.1.8 using `-Wall -Wextra -Werror`. The attribute does not
-perform runtime CPU dispatch, so calling the function on a CPU without AVX2 can
-raise an illegal-instruction fault.
-
-Inside the function:
-
-```c
-__m256i nl;
-```
-
-declares one 256-bit vector. A vector of this size holds 32 eight-bit bytes.
-
-```c
-nl = _mm256_set1_epi8('\n');
-```
-
-fills all 32 lanes with the newline byte.
-
-```c
-gnl->scan_i = 0;
-gnl->scan_n = gnl->read_len - gnl->pos;
-```
-
-starts at offset zero and records how many unread bytes are safe to inspect.
-The scratch fields live in the struct to stay within the 42 Norm's local-variable
-limit. They are reset before use.
-
-```c
-while (gnl->scan_n - gnl->scan_i >= 32)
-```
-
-enters the vector loop only when a complete 32-byte block remains. This prevents
-an out-of-bounds vector load.
-
-```c
-gnl->scan_v = _mm256_loadu_si256((const __m256i *)(gnl->read_buf
-            + gnl->pos + gnl->scan_i));
-```
-
-loads those 32 bytes. The `u` means unaligned, so `read_buf + pos + scan_i` does
-not need a 32-byte-aligned address.
-
-```c
-gnl->scan_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(gnl->scan_v,
-            nl));
-```
-
-compares each input byte with newline. Equal lanes become all-one bytes. The
-movemask then collects their top bits into a 32-bit integer, where bit 0
-represents the first byte and bit 31 represents the last.
-
-```c
-if (gnl->scan_mask)
-    return (gnl->scan_i + __builtin_ctz(gnl->scan_mask) + 1);
-```
-
-a nonzero mask means at least one newline was found. `__builtin_ctz` counts the
-zero bits below the first set bit, giving the first newline's lane index. It is
-called only for a nonzero mask because `ctz(0)` is undefined. The extra one
-includes the newline in the returned chunk length.
-
-```c
-gnl->scan_i += 32;
-```
-
-moves to the next vector when the block contains no newline. After the vector
-loop, the scalar loop checks the final 0 to 31 bytes. These are the bytes that do
-not fill a complete AVX2 register.
-
-## SIMD copy, line by line
-
-`copy_bytes` uses the same function-level `target("avx2")` attribute.
-
-```c
-while (len >= 32)
-```
-
-copies vectors only while a complete 32-byte block remains.
-
-```c
-_mm256_storeu_si256((__m256i *)dst,
-    _mm256_loadu_si256((const __m256i *)src));
-```
-
-loads 32 unaligned source bytes and stores them at an unaligned destination.
-The source and destination never overlap in this implementation.
-
-```c
-dst += 32;
-src += 32;
-len -= 32;
-```
-
-advances both pointers and reduces the remaining length. A scalar loop copies
-the final 0 to 31 bytes. Explicit lengths also allow internal NUL bytes to be
-copied, although the subject declares binary-file behavior undefined.
-
-## Performance
-
-The labels below describe long-line performance only. They are not judgments
-about whether an implementation is readable, correct, or appropriate for a
-learning project.
-
-| Long-line rating | Version | What happens for every chunk |
-| ---------------- | ------- | ---------------------------- |
-| Bad | Friend's `ft_strjoin` version | Measure both strings, allocate their exact combined size, copy both, then free the old stash |
-| Bad | Synthetic repeated `strlen` | Rescan the whole accumulated line, then append into a geometrically grown buffer |
-| Good | Parent scalar version | Track length, grow geometrically, scan and copy one byte at a time |
-| Better | Completed SIMD version | Track length, grow geometrically, scan and copy 32 bytes at a time |
-
-The friend comparison is the real mandatory implementation from
-[`Ketaminepunch/getnextline`](https://github.com/Ketaminepunch/getnextline) at
-commit `62ece7f`. Its direct `ft_strjoin` design is simple and conventional, but
-repeated exact-size allocation and copying become expensive for one long line.
-
-Lower is better. These are end-to-end wall-clock measurements on an Intel
-Core i5-11500H with GCC 16.2.1. They use the grader-style flags
-`-Wall -Wextra -Werror` with no `-O` optimization flag. The input was one
-256 KiB line ending in newline, already in the OS page cache, read three times
-per measurement.
-
-The parent version is revision `749afaeb`, before SIMD and the new initial
-capacity. The repeated-`strlen` version is synthetic: it uses the completed
-implementation but deliberately rescans the accumulated line before every
-append. It is not submitted source.
-
-| `BUFFER_SIZE` | `ft_strjoin` | Repeated `strlen` | Tracked scalar | Tracked SIMD |
-| ------------: | -----------: | ----------------: | -------------: | -----------: |
-|            42 |    8946.6 ms |         5264.0 ms |        10.5 ms |       7.6 ms |
-|           128 |    2882.7 ms |         1900.8 ms |         7.3 ms |       3.9 ms |
-|          1024 |     382.6 ms |          240.5 ms |         6.3 ms |       2.8 ms |
-|          4096 |     103.8 ms |           61.2 ms |         6.3 ms |       2.6 ms |
-|         65536 |      18.6 ms |            6.8 ms |         5.6 ms |       2.5 ms |
-
-The naive comparison inserted this operation before each append:
-
-```c
-line_len = 0;
-while (line && line[line_len])
-    line_len++;
-```
-
-For a long line split into many chunks, earlier bytes are scanned repeatedly.
-That approaches quadratic work as the number of chunks grows. Tracking
-`line_len` makes the work linear. For tiny lines or `BUFFER_SIZE < 32`, syscall
-and allocation costs dominate and SIMD should not be expected to help much.
-These numbers describe this machine and workload, not a portable guarantee.
-
-### Generate evaluator inputs
-
-Raw `/dev/urandom` can contain both `\n` and `\0`, so it does not reliably make
-one long text line. Encoding it with `base64 -w 0` produces printable bytes
-without inserted newlines. These commands create useful stress cases outside
-the submitted source files.
-
-One 50 MiB line with a final newline:
+This implementation requires an x86 CPU with AVX2 support. On Linux it can be
+checked with:
 
 ```sh
-head -c 50M /dev/urandom | base64 -w 0 | head -c 50M > /tmp/gnl-one-50m.txt
-printf '\n' >> /tmp/gnl-one-50m.txt
+grep -w avx2 /proc/cpuinfo
 ```
 
-One 50 MiB line without a final newline:
+## Algorithm And Data Structure
 
-```sh
-head -c 50M /dev/urandom | base64 -w 0 | head -c 50M > /tmp/gnl-no-final-nl.txt
-```
+Each reader is represented by a `t_gnl` structure. It keeps two distinct pieces
+of state:
 
-Twenty separate 1 MiB lines:
+- `read_buf`, `pos`, and `read_len` describe the current input buffer and which
+  bytes have already been consumed.
+- `line`, `line_len`, and `line_cap` describe the line being assembled and the
+  size of its allocation.
 
-```sh
-for i in $(seq 1 20); do
-  head -c 1M /dev/urandom | base64 -w 0 | head -c 1M
-  printf '\n'
-done > /tmp/gnl-many-long-lines.txt
-```
+Each call to `get_next_line()` follows the same loop:
 
-Boundary lines around one 32-byte AVX2 block:
+1. Refill the input buffer only after its previous contents are consumed.
+2. Find the first delimiter in the unread portion of the buffer.
+3. Append that chunk to the current line, growing its allocation if required.
+4. Advance `pos`, leaving bytes after the delimiter for the next call.
+5. Return the line when a delimiter is consumed.
+6. At EOF, return the unfinished final line, or `NULL` when no bytes remain.
 
-```sh
-for n in 31 32 33 63 64 65; do
-  head -c "$n" /dev/zero | tr '\0' x
-  printf '\n'
-done > /tmp/gnl-avx-boundaries.txt
-```
+Keeping `pos` avoids moving leftovers with `memmove()` or allocating a separate
+remainder string. Keeping `line_len` avoids repeatedly scanning the accumulated
+line with `strlen()`.
 
-Build and time several buffer sizes and long-line shapes with the subject's
-flags:
+### Growing the line buffer
 
-```sh
-for size in 42 128 1024 4096 65536; do
-  cc -Wall -Wextra -Werror -D BUFFER_SIZE="$size" \
-    main.c get_next_line.c get_next_line_utils.c -o "/tmp/gnl-$size"
-  for input in /tmp/gnl-one-50m.txt /tmp/gnl-no-final-nl.txt \
-    /tmp/gnl-many-long-lines.txt; do
-    /usr/bin/time -f "BUFFER_SIZE=$size  %e s  %M KiB  $input" \
-      "/tmp/gnl-$size" "$input" > /dev/null
-  done
-done
-```
+The line begins with at least 64 bytes of capacity and doubles whenever it runs
+out of space. A long line therefore grows through capacities such as 64, 128,
+256, and 512 bytes instead of allocating an exact-size string after every read.
 
-`BUFFER_SIZE=1` causes one `read` syscall per byte, so using it on 50 MiB mostly
-benchmarks millions of syscalls and wastes evaluator time. Test it on the small
-boundary file instead:
+An exact-size `strjoin` approach recopies all earlier bytes for every new chunk,
+which can approach quadratic work for a long line. Geometric growth makes the
+number of reallocations small and keeps the total copying proportional to the
+line length.
 
-```sh
-cc -Wall -Wextra -Werror -D BUFFER_SIZE=1 \
-  main.c get_next_line.c get_next_line_utils.c -o /tmp/gnl-1
-/usr/bin/time -f 'BUFFER_SIZE=1  %e s  %M KiB' \
-  /tmp/gnl-1 /tmp/gnl-avx-boundaries.txt > /dev/null
-```
+### SIMD newline search and copy
 
-Run each command more than once. The first run may include filesystem I/O while
-later runs may read from the OS page cache. Redirecting output to `/dev/null`
-keeps terminal rendering out of the measurement, although the local `main.c`
-still calls `printf` for every returned line. For careful comparisons, use the
-same compiler, flags, input, machine, power mode, and number of repetitions.
+SIMD means Single Instruction, Multiple Data. AVX2 is the x86 instruction set
+used here; its 256-bit registers hold 32 bytes. In `chunk_len()`, the delimiter
+is broadcast to all 32 lanes and compared with a 32-byte block from the read
+buffer. A bit mask records matching lanes, and `__builtin_ctz()` locates the
+first match. The final zero to 31 bytes are checked by a normal scalar loop.
 
-### Allocation-failure and crash checks
+`copy_bytes()` uses the same block size to load and store 32 bytes per loop
+iteration before copying its scalar tail. The source and destination do not
+overlap, so no `memmove()` behavior is required.
 
-`funcheck` needs the compiled program before its flags are useful. The complete
-command for this project is:
+Both functions use `__attribute__((target("avx2")))`. This lets GCC and Clang
+emit AVX2 instructions for those functions without adding `-mavx2` to the whole
+program. It does not check the CPU at runtime or provide a fallback. Running the
+program on a CPU without AVX2 may cause an illegal-instruction fault.
 
-```sh
-cc -Wall -Wextra -Werror -D BUFFER_SIZE=42 \
-  main.c get_next_line.c get_next_line_utils.c -o /tmp/gnl-funcheck
-funcheck -abc /tmp/gnl-funcheck /tmp/gnl-many-long-lines.txt
-```
+SIMD does not make the complete function 32 times faster. Calls to `read()`,
+allocation, cache behavior, and scalar tails still contribute to the runtime.
+For small buffers or short lines, those costs may dominate. The main benefit is
+removing much of the per-byte loop work for large chunks.
 
-Here, `-a` tracks allocations, `-b` keeps complete backtraces, and `-c` treats
-`abort()` as a crash. Running only `funcheck -abc` is incomplete and reports
-"No program specified." On the current implementation, funcheck 1.1.5 detected
-and tested nine functions, with nine passing.
+### Mandatory and bonus state
 
-Use Valgrind separately because function-failure injection is not a substitute
-for checking ownership and invalid memory access:
+The mandatory implementation has one static `t_gnl`, so it tracks one stream at
+a time. The bonus implementation has a static array indexed by file descriptor.
+Its read buffers are allocated lazily, avoiding a fixed
+`MAX_FD * BUFFER_SIZE` byte array. On EOF or error, the state and owned memory
+for that descriptor are cleared.
 
-```sh
-valgrind --leak-check=full --show-leak-kinds=all \
-  --errors-for-leak-kinds=all --error-exitcode=99 \
-  /tmp/gnl-funcheck /tmp/gnl-many-long-lines.txt > /dev/null
-```
+## Source Overview
 
-## Source overview
-
-- `get_next_line.c`: mandatory read loop and AVX2 newline search
-- `get_next_line_utils.c`: allocation growth and AVX2 copy
-- `get_next_line_bonus.c`: multi-descriptor read loop and the same search
-- `get_next_line_utils_bonus.c`: bonus allocation growth and copy
-- `main.c`: local manual test program, ignored by the submission repository
+- `get_next_line.c`: mandatory read loop and delimiter search.
+- `get_next_line_utils.c`: line growth, copying, and cleanup.
+- `get_next_line_bonus.c`: multi-descriptor read loop and delimiter search.
+- `get_next_line_utils_bonus.c`: bonus line growth, copying, and cleanup.
+- `get_next_line.h` and `get_next_line_bonus.h`: configuration and reader state.
 
 ## Resources
 
-- The 42 Get Next Line subject, version 14.3, defines the required API, allowed
-  functions, README content, and bonus behavior.
-- [Linux `read(2)` manual](https://man7.org/linux/man-pages/man2/read.2.html)
-  documents short reads, EOF, errors, and file-descriptor behavior.
+- the 42 Get Next Line subject
+- [`read(2)`](https://man7.org/linux/man-pages/man2/read.2.html)
 - [GCC x86 function attributes](https://gcc.gnu.org/onlinedocs/gcc/x86-Function-Attributes.html)
-  documents per-function `target("avx2")` compilation.
-- [Clang attribute reference](https://clang.llvm.org/docs/AttributeReference.html#target)
-  documents Clang's compatible GNU-style `target` function attribute.
-- [GCC bit-operation builtins](https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html)
-  documents `__builtin_ctz` and its undefined zero-input case.
+- [Clang `target` attribute](https://clang.llvm.org/docs/AttributeReference.html#target)
 - [Intel Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)
-  documents the AVX2 load, compare, movemask, and store intrinsics.
-- [Single instruction, multiple data](https://en.wikipedia.org/wiki/Single_instruction%2C_multiple_data)
-  gives an overview of SIMD, its history, and data-level parallelism.
-- [Everyone Should Know SIMD](https://mitchellh.com/writing/everyone-should-know-simd)
-  explains the common vector-loop shape: broadcast, load, operate, reduce, then
-  finish with a scalar tail. That is the same shape used by `chunk_len`.
-- [C static storage duration](https://en.cppreference.com/w/c/language/static_storage_duration.html)
-  explains the lifetime and initialization of the static reader state.
-- [Dynamic arrays](https://en.wikipedia.org/wiki/Dynamic_array) explains capacity
-  and geometric growth.
-- [winstonallo/libft](https://github.com/winstonallo/libft) inspired the SIMD
-  experiment, especially its `ft_strlen` implementation and its excellent
-  `SIMD go brrr` comment. This project adapts the general compare-and-movemask
-  idea to bounded newline search rather than copying that function.
-- [Ketaminepunch/getnextline](https://github.com/Ketaminepunch/getnextline), by
-  a friend, provides the real `ft_strjoin` implementation used in the benchmark
-  comparison.
+- [Dynamic arrays](https://en.wikipedia.org/wiki/Dynamic_array)
 
-AI was used to review the existing optimization, identify the missed SIMD copy
-tail, mirror the changes into the bonus files, design boundary and memory tests,
-create the temporary naive-`strlen` comparison, benchmark the friend's
-`ft_strjoin` version, and help draft this explanation. The implementation and
-benchmark results were checked locally with the real compiler and CPU rather
-than accepted from generated estimates.
+AI was used to help review and structure this README. The described behavior was
+checked against the submitted implementation.
