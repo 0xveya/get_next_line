@@ -6,15 +6,26 @@
 /*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
 /*   Created: 2026/05/04 17:24:16 by flaltens         #+#    #+#              */
-/*   Updated: 2026/08/15 21:28:29 by flaltens        ###   ########.fr        */
+/*   Updated: 2026/08/15 21:48:52 by flaltens        ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "get_next_line.h"
 #include <limits.h>
 
+static void	copy_bytes(char *dst, const char *src,
+				ssize_t len) __attribute__((target("avx2")));
+
 static void	copy_bytes(char *dst, const char *src, ssize_t len)
 {
+	while (len >= 32)
+	{
+		_mm256_storeu_si256((__m256i *)(dst),
+			_mm256_loadu_si256((const __m256i *)(src)));
+		dst += 32;
+		src += 32;
+		len -= 32;
+	}
 	while (len-- > 0)
 		*dst++ = *src++;
 }
@@ -28,7 +39,9 @@ static int	grow_line(t_gnl *gnl, ssize_t needed)
 		return (1);
 	capacity = gnl->line_cap;
 	if (capacity == 0)
-		capacity = needed;
+		capacity = BUFFER_SIZE + 1;
+	if (capacity < 64)
+		capacity = 64;
 	while (capacity < needed)
 	{
 		if (capacity > SSIZE_MAX / 2)

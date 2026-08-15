@@ -6,7 +6,7 @@
 /*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
 /*   Created: 2026/05/04 17:24:25 by flaltens         #+#    #+#              */
-/*   Updated: 2026/08/15 21:28:28 by flaltens        ###   ########.fr        */
+/*   Updated: 2026/08/15 21:39:40 by flaltens        ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -15,6 +15,7 @@
 
 # include <stdlib.h>
 # include <unistd.h>
+# include <immintrin.h>
 
 # ifndef BUFFER_SIZE
 #  define BUFFER_SIZE 1
@@ -22,16 +23,20 @@
 
 typedef struct s_gnl
 {
-	char	read_buf[BUFFER_SIZE];
-	ssize_t	pos;
-	ssize_t	read_len;
-	char	*line;
-	ssize_t	line_len;
-	ssize_t	line_cap;
-}			t_gnl;
+	char			read_buf[BUFFER_SIZE];
+	ssize_t			pos;
+	ssize_t			read_len;
+	char			*line;
+	ssize_t			line_len;
+	ssize_t			line_cap;
+	ssize_t			scan_i;
+	ssize_t			scan_n;
+	unsigned int	scan_mask;
+	__m256i			scan_v;
+}					t_gnl;
 
-int			append_chunk(t_gnl *gnl, const char *chunk, ssize_t len);
-void		clear_gnl(t_gnl *gnl);
-char		*get_next_line(int fd);
+int					append_chunk(t_gnl *gnl, const char *chunk, ssize_t len);
+void				clear_gnl(t_gnl *gnl);
+char				*get_next_line(int fd);
 
 #endif

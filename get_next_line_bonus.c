@@ -12,6 +12,8 @@
 
 #include "get_next_line_bonus.h"
 
+static ssize_t	chunk_len(t_gnl *gnl) __attribute__((target("avx2")));
+
 static int	refill(int fd, t_gnl *gnl)
 {
 	if (!gnl->read_buf)
@@ -27,16 +29,27 @@ static int	refill(int fd, t_gnl *gnl)
 
 static ssize_t	chunk_len(t_gnl *gnl)
 {
-	ssize_t	len;
+	__m256i	nl;
 
-	len = 0;
-	while (gnl->pos + len < gnl->read_len)
+	nl = _mm256_set1_epi8('\n');
+	gnl->scan_i = 0;
+	gnl->scan_n = gnl->read_len - gnl->pos;
+	while (gnl->scan_n - gnl->scan_i >= 32)
 	{
-		len++;
-		if (gnl->read_buf[gnl->pos + len - 1] == '\n')
-			break ;
+		gnl->scan_v = _mm256_loadu_si256((const __m256i *)(gnl->read_buf
+					+ gnl->pos + gnl->scan_i));
+		gnl->scan_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(gnl->scan_v,
+					nl));
+		if (gnl->scan_mask)
+			return (gnl->scan_i + __builtin_ctz(gnl->scan_mask) + 1);
+		gnl->scan_i += 32;
 	}
-	return (len);
+	while (gnl->scan_i < gnl->scan_n)
+	{
+		if (gnl->read_buf[gnl->pos + gnl->scan_i++] == '\n')
+			return (gnl->scan_i);
+	}
+	return (gnl->scan_n);
 }
 
 static char	*finish_line(t_gnl *gnl)
@@ -65,7 +78,7 @@ char	*get_next_line(int fd)
 		if (!append_chunk(reader, reader->read_buf + reader->pos, len))
 			return (clear_gnl(reader), NULL);
 		reader->pos += len;
-		if (reader->line[reader->line_len - 1] == '\n')
+		if (reader->read_buf[reader->pos - 1] == '\n')
 			return (finish_line(reader));
 	}
 	if (reader->read_len < 0 || reader->line_len == 0)
