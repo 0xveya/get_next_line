@@ -3,10 +3,10 @@
 /*                                                       :::      ::::::::    */
 /*   get_next_line.c                                   :+:      :+:    :+:    */
 /*                                                   +:+ +:+         +:+      */
-/*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
+/*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
-/*   Created: 2026/05/04 17:24:21 by flaltens         #+#    #+#              */
-/*   Updated: 2026/08/15 21:43:09 by flaltens        ###   ########.fr        */
+/*   Created: 2026/05/04 17:24:21 by sfurst           #+#    #+#              */
+/*   Updated: 2026/08/15 22:20:27 by sfurst          ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -25,7 +25,7 @@ static ssize_t	chunk_len(t_gnl *gnl)
 {
 	__m256i	nl;
 
-	nl = _mm256_set1_epi8('\n');
+	nl = _mm256_set1_epi8(GNL_DELIMITER);
 	gnl->scan_i = 0;
 	gnl->scan_n = gnl->read_len - gnl->pos;
 	while (gnl->scan_n - gnl->scan_i >= 32)
@@ -40,7 +40,7 @@ static ssize_t	chunk_len(t_gnl *gnl)
 	}
 	while (gnl->scan_i < gnl->scan_n)
 	{
-		if (gnl->read_buf[gnl->pos + gnl->scan_i++] == '\n')
+		if (gnl->read_buf[gnl->pos + gnl->scan_i++] == GNL_DELIMITER)
 			return (gnl->scan_i);
 	}
 	return (gnl->scan_n);
@@ -70,7 +70,7 @@ char	*get_next_line(int fd)
 		if (!append_chunk(&gnl, gnl.read_buf + gnl.pos, len))
 			return (clear_gnl(&gnl), NULL);
 		gnl.pos += len;
-		if (gnl.read_buf[gnl.pos - 1] == '\n')
+		if (gnl.read_buf[gnl.pos - 1] == GNL_DELIMITER)
 			return (finish_line(&gnl));
 	}
 	if (gnl.read_len < 0 || gnl.line_len == 0)

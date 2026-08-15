@@ -3,10 +3,10 @@
 /*                                                       :::      ::::::::    */
 /*   get_next_line_bonus.c                             :+:      :+:    :+:    */
 /*                                                   +:+ +:+         +:+      */
-/*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
+/*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
-/*   Created: 2026/05/04 17:24:21 by flaltens         #+#    #+#              */
-/*   Updated: 2026/08/15 21:28:28 by flaltens        ###   ########.fr        */
+/*   Created: 2026/05/04 17:24:21 by sfurst           #+#    #+#              */
+/*   Updated: 2026/08/15 22:20:29 by sfurst          ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -31,7 +31,7 @@ static ssize_t	chunk_len(t_gnl *gnl)
 {
 	__m256i	nl;
 
-	nl = _mm256_set1_epi8('\n');
+	nl = _mm256_set1_epi8(GNL_DELIMITER);
 	gnl->scan_i = 0;
 	gnl->scan_n = gnl->read_len - gnl->pos;
 	while (gnl->scan_n - gnl->scan_i >= 32)
@@ -46,7 +46,7 @@ static ssize_t	chunk_len(t_gnl *gnl)
 	}
 	while (gnl->scan_i < gnl->scan_n)
 	{
-		if (gnl->read_buf[gnl->pos + gnl->scan_i++] == '\n')
+		if (gnl->read_buf[gnl->pos + gnl->scan_i++] == GNL_DELIMITER)
 			return (gnl->scan_i);
 	}
 	return (gnl->scan_n);
@@ -78,7 +78,7 @@ char	*get_next_line(int fd)
 		if (!append_chunk(reader, reader->read_buf + reader->pos, len))
 			return (clear_gnl(reader), NULL);
 		reader->pos += len;
-		if (reader->read_buf[reader->pos - 1] == '\n')
+		if (reader->read_buf[reader->pos - 1] == GNL_DELIMITER)
 			return (finish_line(reader));
 	}
 	if (reader->read_len < 0 || reader->line_len == 0)

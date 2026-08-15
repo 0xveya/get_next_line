@@ -3,10 +3,10 @@
 /*                                                       :::      ::::::::    */
 /*   get_next_line_utils_bonus.c                       :+:      :+:    :+:    */
 /*                                                   +:+ +:+         +:+      */
-/*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
+/*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
-/*   Created: 2026/05/04 17:24:16 by flaltens         #+#    #+#              */
-/*   Updated: 2026/08/15 21:28:29 by flaltens        ###   ########.fr        */
+/*   Created: 2026/05/04 17:24:16 by sfurst           #+#    #+#              */
+/*   Updated: 2026/08/15 22:20:30 by sfurst          ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 

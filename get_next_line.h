@@ -3,10 +3,10 @@
 /*                                                       :::      ::::::::    */
 /*   get_next_line.h                                   :+:      :+:    :+:    */
 /*                                                   +:+ +:+         +:+      */
-/*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
+/*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
-/*   Created: 2026/05/04 17:24:25 by flaltens         #+#    #+#              */
-/*   Updated: 2026/08/15 21:39:40 by flaltens        ###   ########.fr        */
+/*   Created: 2026/05/04 17:24:25 by sfurst           #+#    #+#              */
+/*   Updated: 2026/08/15 22:20:28 by sfurst          ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -19,6 +19,9 @@
 
 # ifndef BUFFER_SIZE
 #  define BUFFER_SIZE 1
+# endif
+# ifndef GNL_DELIMITER
+#  define GNL_DELIMITER '\n'
 # endif
 
 typedef struct s_gnl

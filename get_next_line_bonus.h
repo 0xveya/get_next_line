@@ -3,10 +3,10 @@
 /*                                                       :::      ::::::::    */
 /*   get_next_line_bonus.h                             :+:      :+:    :+:    */
 /*                                                   +:+ +:+         +:+      */
-/*   By: flaltens <flaltens@student.42vienna.com>  #+#  +:+       +#+         */
+/*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
-/*   Created: 2026/05/04 17:24:25 by flaltens         #+#    #+#              */
-/*   Updated: 2026/08/15 21:28:29 by flaltens        ###   ########.fr        */
+/*   Created: 2026/05/04 17:24:25 by sfurst           #+#    #+#              */
+/*   Updated: 2026/08/15 22:20:29 by sfurst          ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -19,6 +19,9 @@
 
 # ifndef BUFFER_SIZE
 #  define BUFFER_SIZE 1
+# endif
+# ifndef GNL_DELIMITER
+#  define GNL_DELIMITER '\n'
 # endif
 # ifndef MAX_FD
 #  define MAX_FD 1024
@@ -38,8 +41,8 @@ typedef struct s_gnl
 	__m256i			scan_v;
 }					t_gnl;
 
-int			append_chunk(t_gnl *gnl, const char *chunk, ssize_t len);
-void		clear_gnl(t_gnl *gnl);
-char		*get_next_line(int fd);
+int					append_chunk(t_gnl *gnl, const char *chunk, ssize_t len);
+void				clear_gnl(t_gnl *gnl);
+char				*get_next_line(int fd);
 
 #endif

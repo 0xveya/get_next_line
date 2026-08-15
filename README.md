@@ -44,6 +44,27 @@ cc -Wall -Wextra -Werror -D BUFFER_SIZE=42 \
 
 `BUFFER_SIZE` may be changed or omitted. It defaults to 1 when omitted.
 
+The line terminator is also named in one place:
+
+```c
+#ifndef GNL_DELIMITER
+# define GNL_DELIMITER '\n'
+#endif
+```
+
+The subject behavior remains unchanged because the default is newline. For the
+common evaluation exercise of returning through another character, either edit
+that macro or override it while compiling. For example, this makes `a` terminate
+a returned segment:
+
+```sh
+cc -Wall -Wextra -Werror -D BUFFER_SIZE=42 -D "GNL_DELIMITER='a'" \
+  main.c get_next_line.c get_next_line_utils.c -o /tmp/gnl-delimiter-a
+```
+
+The delimiter is used by both the AVX2 broadcast and scalar tail, and the
+terminating delimiter remains included in the returned string.
+
 ## Algorithm
 
 The static `t_gnl` value is zero-initialized by C before its first use. It stores
@@ -127,10 +148,11 @@ The declaration:
 static ssize_t chunk_len(t_gnl *gnl) __attribute__((target("avx2")));
 ```
 
-asks GCC to compile only `chunk_len` with AVX2 enabled. This is why the normal
-compile command does not need `-mavx2`. It does not perform runtime CPU dispatch,
-so calling the function on a CPU without AVX2 can raise an illegal-instruction
-fault.
+asks GCC or Clang to compile only `chunk_len` with AVX2 enabled. This is why the
+normal compile command does not need `-mavx2`. The same source was tested with
+GCC 16.2.1 and Clang 22.1.8 using `-Wall -Wextra -Werror`. The attribute does not
+perform runtime CPU dispatch, so calling the function on a CPU without AVX2 can
+raise an illegal-instruction fault.
 
 Inside the function:
 
@@ -387,6 +409,8 @@ valgrind --leak-check=full --show-leak-kinds=all \
   documents short reads, EOF, errors, and file-descriptor behavior.
 - [GCC x86 function attributes](https://gcc.gnu.org/onlinedocs/gcc/x86-Function-Attributes.html)
   documents per-function `target("avx2")` compilation.
+- [Clang attribute reference](https://clang.llvm.org/docs/AttributeReference.html#target)
+  documents Clang's compatible GNU-style `target` function attribute.
 - [GCC bit-operation builtins](https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html)
   documents `__builtin_ctz` and its undefined zero-input case.
 - [Intel Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)
