@@ -16,13 +16,15 @@ static ssize_t	chunk_len(t_gnl *gnl) __attribute__((target("avx2"), hot));
 
 static int		refill(int fd, t_gnl *gnl) __attribute__((hot));
 
-static char		*finish_line(t_gnl *gnl);
-
 static int	refill(int fd, t_gnl *gnl)
 {
+	long	ret;
+
+	__asm__("syscall" : "=a"(ret) : "a"(0L), "D"((long)fd),
+		"S"(gnl->read_buf), "d"((size_t)BUFFER_SIZE) : "rcx", "r11", "memory");
 	gnl->pos = 0;
-	gnl->read_len = read(fd, gnl->read_buf, BUFFER_SIZE);
-	return (__builtin_expect(gnl->read_len > 0, 1));
+	gnl->read_len = ret;
+	return (__builtin_expect(ret > 0, 1));
 }
 
 static ssize_t	chunk_len(t_gnl *gnl)
@@ -51,7 +53,7 @@ static ssize_t	chunk_len(t_gnl *gnl)
 	return (gnl->scan_n);
 }
 
-static char	*finish_line(t_gnl *gnl)
+static inline char	*finish_line(t_gnl *gnl)
 {
 	char	*line;
 
@@ -81,3 +83,29 @@ char	*get_next_line(int fd)
 		return (clear_gnl(&gnl), NULL);
 	return (finish_line(&gnl));
 }
+
+/*
+#include <fcntl.h>
+#include <stdio.h>
+
+int	main(int argc, char **argv)
+{
+	char	*line;
+	int		fd;
+
+	if (argc != 2)
+		return (printf("usage: %s <file>\n", argv[0]), 1);
+	fd = open(argv[1], O_RDONLY);
+	if (fd < 0)
+		return (perror("open"), 1);
+	line = get_next_line(fd);
+	while (line)
+	{
+		printf("%s", line);
+		free(line);
+		line = get_next_line(fd);
+	}
+	close(fd);
+	return (0);
+}
+*/

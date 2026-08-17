@@ -189,7 +189,7 @@ static inline int refill(int fd, t_gnl *gnl)
 {
     long ret;
 
-    __asm__ volatile("syscall" : "=a"(ret) : "a"(0L), "D"((long)fd),
+    __asm__("syscall" : "=a"(ret) : "a"(0L), "D"((long)fd),
         "S"(gnl->read_buf), "d"((size_t)BUFFER_SIZE)
         : "rcx", "r11", "memory");
     gnl->pos = 0;
@@ -226,8 +226,8 @@ must be told that their previous values do not survive the assembly statement.
 The `"memory"` clobber tells the compiler that memory can be changed by the
 operation. That matters because the kernel writes bytes into `gnl->read_buf`; the
 compiler must not move surrounding memory accesses across the assembly as if the
-buffer were untouched. `volatile` tells the compiler that the assembly has an
-observable effect and must not simply be deleted as dead computation.
+buffer were untouched. The used `ret` output makes the assembly observable, so
+the compiler cannot delete it as dead computation.
 
 A successful `read` returns a positive byte count. EOF returns zero. A raw Linux
 syscall reports failure as a negative error value in `RAX`; unlike the libc
@@ -458,8 +458,9 @@ repeated exact-size allocation and copying become expensive for one long line.
 Lower is better. These are end-to-end wall-clock measurements on an Intel
 Core i5-11500H with GCC 16.2.1. They use the grader-style flags
 `-Wall -Wextra -Werror` with no `-O` optimization flag. The input was one
-256 KiB line ending in newline, already in the OS page cache, read three times
-per measurement.
+256 KiB line ending in newline, already in the OS page cache. The comparison
+columns used three reads per measurement. The current Tracked SIMD column is
+the average of ten batches of 1,000 complete program executions.
 
 The parent version is revision `749afaeb`, before SIMD and the new initial
 capacity. The repeated-`strlen` version is synthetic: it uses the completed
@@ -468,11 +469,11 @@ append. It is not submitted source.
 
 | `BUFFER_SIZE` | `ft_strjoin` | Repeated `strlen` | Tracked scalar | Tracked SIMD |
 | ------------: | -----------: | ----------------: | -------------: | -----------: |
-|            42 |    8946.6 ms |         5264.0 ms |        10.5 ms |       3.24 ms |
-|           128 |    2882.7 ms |         1900.8 ms |         7.3 ms |       2.16 ms |
-|          1024 |     382.6 ms |          240.5 ms |         6.3 ms |       2.03 ms |
-|          4096 |     103.8 ms |           61.2 ms |         6.3 ms |       2.09 ms |
-|         65536 |      18.6 ms |            6.8 ms |         5.6 ms |       2.05 ms |
+|            42 |    8946.6 ms |         5264.0 ms |        10.5 ms |      4.703 ms |
+|           128 |    2882.7 ms |         1900.8 ms |         7.3 ms |      1.780 ms |
+|          1024 |     382.6 ms |          240.5 ms |         6.3 ms |      1.136 ms |
+|          4096 |     103.8 ms |           61.2 ms |         6.3 ms |      1.106 ms |
+|         65536 |      18.6 ms |            6.8 ms |         5.6 ms |      1.098 ms |
 
 The naive comparison inserted this operation before each append:
 
