@@ -1,4 +1,4 @@
-*This project has been created as part of the 42 curriculum by sfurst.*
+_This project has been created as part of the 42 curriculum by sfurst._
 
 ## Description
 
@@ -10,9 +10,15 @@ The mandatory implementation keeps one buffered reader in a static variable.
 The bonus implementation keeps one static array of readers so calls can be
 interleaved across several file descriptors.
 
-This version experiments with AVX2 SIMD. It searches 32 bytes for a newline at
-once and copies complete 32-byte blocks at once. The rest of the program still
-compiles for the normal target, without a global `-mavx2` flag.
+This version experiments with AVX2 SIMD and a direct Linux x86-64 `read` syscall.
+It searches 32 bytes for a delimiter at once, copies large chunks with an unrolled
+AVX2 loop, and enters the kernel directly from `refill()` instead of calling the
+libc `read()` wrapper. Function attributes enable these optimizations only where
+they are requested, so the normal compile command still does not need a global
+`-mavx2` flag.
+
+The direct syscall makes this implementation intentionally platform-specific: the
+inline assembly shown below is for the Linux x86-64 syscall ABI.
 
 ## Instructions
 
@@ -120,6 +126,138 @@ the compiler is not being asked to discover and auto-vectorize a scalar loop.
 The intrinsics explicitly request vector operations, so the AVX2 instructions
 are still emitted.
 
+## Compiler attributes used
+
+Several GNU-style function attributes tell GCC or Clang how individual hot-path
+functions should be compiled. They affect compiler code generation; they do not
+change the C API of `get_next_line`.
+
+```c
+static ssize_t chunk_len(t_gnl *gnl)
+    __attribute__((target("avx2"), hot));
+
+static inline int refill(int fd, t_gnl *gnl)
+    __attribute__((always_inline, hot));
+
+static inline char *finish_line(t_gnl *gnl)
+    __attribute__((always_inline));
+```
+
+`target("avx2")` enables AVX2 instructions for that function only. `chunk_len`
+and `copy_bytes` therefore may use `_mm256_*` intrinsics even though the complete
+program is compiled without `-mavx2`. This is a compile-time promise, not a CPU
+feature check: executing those functions on a CPU without AVX2 can still fault.
+
+`hot` tells the compiler that a function is expected to be on an important,
+frequently executed path. GCC may optimize a hot function more aggressively and
+may place hot functions together to improve instruction-cache locality. It is a
+hint to the optimizer, not a correctness requirement and not a guarantee of a
+particular instruction sequence.
+
+`always_inline` strengthens the request made by the `inline` keyword. It is used
+for `refill` and `finish_line` because both are tiny helpers in the central read
+loop. Inlining removes an ordinary C function call boundary when the compiler can
+honor the attribute. The attribute should still be viewed as a code-generation
+choice rather than part of the algorithm's correctness.
+
+The code also uses `__builtin_expect(expression, expected)` around branches. That
+is a branch-probability hint rather than a function attribute. The second argument
+says which result the programmer expects most often: `1` means the expression is
+usually true and `0` means it is usually false. For example, `ret > 0` is marked
+likely because normal reads usually return data, while allocation failure and a
+nonzero newline mask are marked unlikely. The compiler can use this information
+to arrange the likely path as the straight-through path and move uncommon paths
+out of the way, reducing unnecessary jumps on the hot path and potentially
+improving instruction-cache behavior. It does not force the CPU's branch predictor
+to make a particular prediction, and it never changes the value or correctness of
+the condition.
+
+These hints matter most here because `get_next_line` contains a small, repeatedly
+executed loop. The intended fast path is: buffered data exists (or `refill`
+succeeds), `append_chunk` succeeds, and scanning continues without finding the
+delimiter until the final chunk. Error handling, allocation failure, and delimiter
+hits are deliberately treated as side paths. Modern CPUs already predict branches
+dynamically, so `__builtin_expect` should be understood as a code-layout/compiler
+hint rather than a guaranteed speedup.
+
+## Direct Linux x86-64 `read` syscall
+
+`refill` now invokes the kernel directly with GNU extended inline assembly:
+
+```c
+static inline int refill(int fd, t_gnl *gnl)
+{
+    long ret;
+
+    __asm__ volatile("syscall" : "=a"(ret) : "a"(0L), "D"((long)fd),
+        "S"(gnl->read_buf), "d"((size_t)BUFFER_SIZE)
+        : "rcx", "r11", "memory");
+    gnl->pos = 0;
+    gnl->read_len = ret;
+    return (__builtin_expect(ret > 0, 1));
+}
+```
+
+On the Linux x86-64 syscall ABI, the syscall number is passed in `RAX`; arguments
+1 through 6 use `RDI`, `RSI`, `RDX`, `R10`, `R8`, and `R9`; and the return value
+comes back in `RAX`. `read` needs only three arguments, so this function uses:
+
+| Inline-asm operand | Register | Meaning for `read` |
+| ------------------ | -------- | ------------------ |
+| `"a"(0L)` | `RAX` | syscall number `0`, which is `read` on Linux x86-64 |
+| `"D"((long)fd)` | `RDI` | argument 1: file descriptor |
+| `"S"(gnl->read_buf)` | `RSI` | argument 2: destination buffer |
+| `"d"((size_t)BUFFER_SIZE)` | `RDX` | argument 3: maximum byte count |
+| `"=a"(ret)` | `RAX` | return value after the syscall |
+
+The constraint letters are GCC's x86 register constraints: `a` selects the
+accumulator register, while `D`, `S`, and `d` select the registers required here
+for the first three syscall arguments. The same `RAX` register is an input before
+`syscall` and an output afterwards.
+
+The clobber list is equally important:
+
+```c
+: "rcx", "r11", "memory"
+```
+
+The x86-64 `syscall` instruction itself overwrites `RCX` and `R11`, so the compiler
+must be told that their previous values do not survive the assembly statement.
+The `"memory"` clobber tells the compiler that memory can be changed by the
+operation. That matters because the kernel writes bytes into `gnl->read_buf`; the
+compiler must not move surrounding memory accesses across the assembly as if the
+buffer were untouched. `volatile` tells the compiler that the assembly has an
+observable effect and must not simply be deleted as dead computation.
+
+A successful `read` returns a positive byte count. EOF returns zero. A raw Linux
+syscall reports failure as a negative error value in `RAX`; unlike the libc
+`read()` wrapper, this inline syscall does not translate that value to `-1` and
+set `errno`. `get_next_line` only needs to distinguish positive data from EOF or
+failure, so `refill` returns true only when `ret > 0`, and the outer function later
+clears its state and returns `NULL` when `read_len < 0`.
+
+### Why bypass libc here
+
+The direct syscall removes the userspace `read()` wrapper from this hot path. In
+particular, this implementation does not need libc to inspect a kernel error,
+convert Linux's negative error return into `-1`, and publish the error number
+through `errno`: `get_next_line` never uses `errno` and only cares whether the raw
+return value is positive, zero, or negative. That makes the path from this helper
+to the kernel deliberately minimal.
+
+This can remove a small amount of wrapper/error-handling overhead, so the direct
+syscall can be faster at the call boundary. It should not be described as a large
+or guaranteed speedup: the kernel still performs exactly the expensive part of
+`read`, and for normal successful reads the libc wrapper is already very thin.
+For this project the more important performance wins are avoiding repeated
+allocation/copying, tracking lengths directly, and processing bytes in AVX2-sized
+blocks. The raw syscall is a smaller hot-path optimization on top of those changes.
+
+This is deliberately less portable than calling `read(fd, buf, count)`. Syscall
+numbers, registers, instructions, and error conventions vary by architecture and
+ABI. The assembly above should therefore be read specifically as Linux x86-64
+code, not as a generic C implementation.
+
 ## Why capacity growth is faster than `strjoin`
 
 Suppose a long line arrives in `n` chunks. An exact-size `strjoin` approach
@@ -145,7 +283,7 @@ much less frequent growth steps. The total work stays linear in the line length.
 The declaration:
 
 ```c
-static ssize_t chunk_len(t_gnl *gnl) __attribute__((target("avx2")));
+static ssize_t chunk_len(t_gnl *gnl) __attribute__((target("avx2"), hot));
 ```
 
 asks GCC or Clang to compile only `chunk_len` with AVX2 enabled. This is why the
@@ -243,36 +381,51 @@ the function returns the complete unread length.
 
 ```c
 static void copy_bytes(char *dst, const char *src,
-    ssize_t len) __attribute__((target("avx2")));
+    ssize_t len) __attribute__((target("avx2"), hot));
 ```
 
 The attribute affects code generation for this function only and does not alter
 the function's arguments or return type.
 
 ```c
-while (len >= 32)
+while (len >= 128)
 ```
 
-copies vectors only while a complete 32-byte block remains.
+handles four AVX2 vectors per loop iteration. The body performs four independent
+32-byte loads and stores at offsets 0, 32, 64, and 96, then advances the pointers
+by 128 bytes. This manual unrolling reduces loop-counter updates and branches for
+large copies.
 
 ```c
 _mm256_storeu_si256((__m256i *)dst,
     _mm256_loadu_si256((const __m256i *)src));
+_mm256_storeu_si256((__m256i *)(dst + 32),
+    _mm256_loadu_si256((const __m256i *)(src + 32)));
+_mm256_storeu_si256((__m256i *)(dst + 64),
+    _mm256_loadu_si256((const __m256i *)(src + 64)));
+_mm256_storeu_si256((__m256i *)(dst + 96),
+    _mm256_loadu_si256((const __m256i *)(src + 96)));
 ```
 
-loads 32 unaligned source bytes and stores them at an unaligned destination.
-The inner load is evaluated before the outer store. The casts present the byte
-pointers as vector pointers, while the `u` suffix means neither address needs
-32-byte alignment. The source and destination never overlap in this
+Each load/store pair moves 32 unaligned bytes, for 128 bytes total. The casts
+present the byte pointers as vector pointers, while the `u` suffix means neither
+address needs 32-byte alignment. The source and destination never overlap in this
 implementation, so `memmove` behavior is unnecessary.
 
+After the 128-byte loop, a second loop handles any remaining complete vectors:
+
 ```c
-dst += 32;
-src += 32;
-len -= 32;
+while (len >= 32)
+{
+    _mm256_storeu_si256((__m256i *)dst,
+        _mm256_loadu_si256((const __m256i *)src));
+    dst += 32;
+    src += 32;
+    len -= 32;
+}
 ```
 
-advances both pointers and reduces the remaining length. The scalar tail is:
+The scalar tail then handles the final zero to 31 bytes:
 
 ```c
 while (len-- > 0)
@@ -315,11 +468,11 @@ append. It is not submitted source.
 
 | `BUFFER_SIZE` | `ft_strjoin` | Repeated `strlen` | Tracked scalar | Tracked SIMD |
 | ------------: | -----------: | ----------------: | -------------: | -----------: |
-|            42 |    8946.6 ms |         5264.0 ms |        10.5 ms |       7.6 ms |
-|           128 |    2882.7 ms |         1900.8 ms |         7.3 ms |       3.9 ms |
-|          1024 |     382.6 ms |          240.5 ms |         6.3 ms |       2.8 ms |
-|          4096 |     103.8 ms |           61.2 ms |         6.3 ms |       2.6 ms |
-|         65536 |      18.6 ms |            6.8 ms |         5.6 ms |       2.5 ms |
+|            42 |    8946.6 ms |         5264.0 ms |        10.5 ms |       3.24 ms |
+|           128 |    2882.7 ms |         1900.8 ms |         7.3 ms |       2.16 ms |
+|          1024 |     382.6 ms |          240.5 ms |         6.3 ms |       2.03 ms |
+|          4096 |     103.8 ms |           61.2 ms |         6.3 ms |       2.09 ms |
+|         65536 |      18.6 ms |            6.8 ms |         5.6 ms |       2.05 ms |
 
 The naive comparison inserted this operation before each append:
 
@@ -432,7 +585,7 @@ valgrind --leak-check=full --show-leak-kinds=all \
 
 ## Source overview
 
-- `get_next_line.c`: mandatory read loop and AVX2 newline search
+- `get_next_line.c`: mandatory read loop, inline Linux x86-64 `read` syscall, and AVX2 newline search
 - `get_next_line_utils.c`: allocation growth and AVX2 copy
 - `get_next_line_bonus.c`: multi-descriptor read loop and the same search
 - `get_next_line_utils_bonus.c`: bonus allocation growth and copy
@@ -444,8 +597,21 @@ valgrind --leak-check=full --show-leak-kinds=all \
   functions, README content, and bonus behavior.
 - [Linux `read(2)` manual](https://man7.org/linux/man-pages/man2/read.2.html)
   documents short reads, EOF, errors, and file-descriptor behavior.
+- [Linux `syscall(2)` manual](https://man7.org/linux/man-pages/man2/syscall.2.html)
+  explains direct system-call invocation and architecture-specific calling
+  conventions.
+- [Filippo Valsorda's searchable Linux syscall table](https://filippo.io/linux-syscall-table/)
+  is a compact x86-64 reference for syscall numbers, argument names, and the
+  register convention; it is especially useful for checking which register
+  carries each argument when writing inline syscall assembly.
+- [Chromium OS Linux syscall table](https://www.chromium.org/chromium-os/developer-library/reference/linux-constants/syscalls/)
+  gives a cross-architecture register cheat sheet, including x86-64 `RAX` for
+  the syscall number/return value and `RDI`, `RSI`, `RDX`, `R10`, `R8`, `R9` for
+  arguments.
 - [GCC x86 function attributes](https://gcc.gnu.org/onlinedocs/gcc/x86-Function-Attributes.html)
   documents per-function `target("avx2")` compilation.
+- [GCC common function attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html)
+  documents `hot` and `always_inline`.
 - [Clang attribute reference](https://clang.llvm.org/docs/AttributeReference.html#target)
   documents Clang's compatible GNU-style `target` function attribute.
 - [GCC bit-operation builtins](https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html)
@@ -472,6 +638,7 @@ valgrind --leak-check=full --show-leak-kinds=all \
 AI was used to review the existing optimization, identify the missed SIMD copy
 tail, mirror the changes into the bonus files, design boundary and memory tests,
 create the temporary naive-`strlen` comparison, benchmark the friend's
-`ft_strjoin` version, and help draft this explanation. The implementation and
+`ft_strjoin` version, and help draft this explanation, including the compiler-attribute
+and direct-syscall documentation. The implementation and
 benchmark results were checked locally with the real compiler and CPU rather
 than accepted from generated estimates.
