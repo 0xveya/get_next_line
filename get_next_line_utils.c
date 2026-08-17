@@ -6,7 +6,7 @@
 /*   By: sfurst <sfurst@student.42vienna.com>      #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
 /*   Created: 2026/05/04 17:24:16 by sfurst           #+#    #+#              */
-/*   Updated: 2026/08/15 22:20:28 by sfurst          ###   ########.fr        */
+/*   Updated: 2026/08/17 21:58:26 by sfurst          ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -14,14 +14,28 @@
 #include <limits.h>
 
 static void	copy_bytes(char *dst, const char *src,
-				ssize_t len) __attribute__((target("avx2")));
+				ssize_t len) __attribute__((target("avx2"), hot));
 
 static void	copy_bytes(char *dst, const char *src, ssize_t len)
 {
+	while (len >= 128)
+	{
+		_mm256_storeu_si256((__m256i *)dst,
+			_mm256_loadu_si256((const __m256i *)src));
+		_mm256_storeu_si256((__m256i *)(dst + 32),
+			_mm256_loadu_si256((const __m256i *)(src + 32)));
+		_mm256_storeu_si256((__m256i *)(dst + 64),
+			_mm256_loadu_si256((const __m256i *)(src + 64)));
+		_mm256_storeu_si256((__m256i *)(dst + 96),
+			_mm256_loadu_si256((const __m256i *)(src + 96)));
+		dst += 128;
+		src += 128;
+		len -= 128;
+	}
 	while (len >= 32)
 	{
-		_mm256_storeu_si256((__m256i *)(dst),
-			_mm256_loadu_si256((const __m256i *)(src)));
+		_mm256_storeu_si256((__m256i *)dst,
+			_mm256_loadu_si256((const __m256i *)src));
 		dst += 32;
 		src += 32;
 		len -= 32;
@@ -35,22 +49,22 @@ static int	grow_line(t_gnl *gnl, ssize_t needed)
 	char	*new;
 	ssize_t	capacity;
 
-	if (needed <= gnl->line_cap)
+	if (__builtin_expect(needed <= gnl->line_cap, 1))
 		return (1);
 	capacity = gnl->line_cap;
-	if (capacity == 0)
+	if (__builtin_expect(capacity == 0, 0))
 		capacity = BUFFER_SIZE + 1;
-	if (capacity < 64)
+	if (__builtin_expect(capacity < 64, 0))
 		capacity = 64;
-	while (capacity < needed)
+	while (__builtin_expect(capacity < needed, 0))
 	{
-		if (capacity > SSIZE_MAX / 2)
+		if (__builtin_expect(capacity > SSIZE_MAX / 2, 0))
 			capacity = needed;
 		else
 			capacity *= 2;
 	}
 	new = malloc(capacity);
-	if (!new)
+	if (__builtin_expect(new == NULL, 0))
 		return (0);
 	copy_bytes(new, gnl->line, gnl->line_len);
 	free(gnl->line);
@@ -61,9 +75,9 @@ static int	grow_line(t_gnl *gnl, ssize_t needed)
 
 int	append_chunk(t_gnl *gnl, const char *chunk, ssize_t len)
 {
-	if (len > SSIZE_MAX - gnl->line_len - 1)
+	if (__builtin_expect(len > SSIZE_MAX - gnl->line_len - 1, 0))
 		return (0);
-	if (!grow_line(gnl, gnl->line_len + len + 1))
+	if (__builtin_expect(!grow_line(gnl, gnl->line_len + len + 1), 0))
 		return (0);
 	copy_bytes(gnl->line + gnl->line_len, chunk, len);
 	gnl->line_len += len;
